@@ -2,8 +2,8 @@ name: Daily Startup Leads Automation
 
 on:
   schedule:
-    - cron: '0 9 * * *' # Runs automatically every day at 9:00 AM UTC
-  workflow_dispatch: # Allows you to trigger it manually anytime via GitHub UI
+    - cron: '0 9 * * *'
+  workflow_dispatch:
 
 jobs:
   run-scraper:
