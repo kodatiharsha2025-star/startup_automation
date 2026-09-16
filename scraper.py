@@ -1,9 +1,6 @@
 import os
 import requests
 import time
-import re
-import xml.etree.ElementTree as ET
-from bs4 import BeautifulSoup
 import pandas as pd
 import openpyxl
 from datetime import datetime, timedelta
@@ -18,32 +15,6 @@ def clean_domain(url):
     clean = clean.replace("www.", "")
     return clean
 
-def extract_real_email_from_website(url):
-    # Attempts to find a real published contact email from the homepage
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=4)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            # Look for mailto links
-            mailtos = soup.find_all('a', href=re.compile(r'^mailto:'))
-            for m in mailtos:
-                email = m['href'].replace('mailto:', '').split('?')[0].strip()
-                if '@' in email and '.' in email:
-                    return email
-            
-            # Look via regex for email pattern in text
-            emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', res.text)
-            for e in emails:
-                if not any(x in e.lower() for x in ['example', 'png', 'jpg', 'w3.org', 'domain', 'sentry']):
-                    return e
-    except:
-        pass
-    
-    # Fallback to smart pattern if no public email found on homepage
-    domain = clean_domain(url)
-    return f"founders@{domain}"
-
 def scrape_historical_y_combinator():
     leads = []
     # Calculate timestamp for 6 months ago
@@ -51,7 +22,7 @@ def scrape_historical_y_combinator():
     timestamp_limit = int(six_months_ago.timestamp())
     
     # Loop through multiple pages to capture 6 months of historical Show HN launches
-    for page in range(10): # Pulls up to 1000 historical records across pages
+    for page in range(10): # Pulls up to 1000 historical records safely
         url = f"https://hn.algolia.com/api/v1/search_by_date?tags=show_hn&numericFilters=created_at_i>{timestamp_limit}&hitsPerPage=100&page={page}"
         headers = {"User-Agent": "Mozilla/5.0"}
         try:
@@ -77,8 +48,8 @@ def scrape_historical_y_combinator():
                         except:
                             pass
 
-                    # Try to extract real email or use clean fallback
-                    email = extract_real_email_from_website(url_site)
+                    domain = clean_domain(url_site)
+                    email = f"founders@{domain}"
 
                     leads.append({
                         "Company Name": title.replace("Show HN: ", ""),
@@ -88,7 +59,7 @@ def scrape_historical_y_combinator():
                         "Phone": "Not Disclosed",
                         "Context": "Historical Show HN / YC startup from the past 6 months looking for explainer & demo videos."
                     })
-                time.sleep(0.5) # Be polite to the free API endpoint
+                time.sleep(0.3)
         except Exception as e:
             print(f"Error fetching historical page {page}:", e)
             break
