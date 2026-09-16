@@ -1,5 +1,6 @@
 import os
 import requests
+import xml.etree.ElementTree as ET
 import pandas as pd
 import openpyxl
 from datetime import datetime
@@ -9,59 +10,97 @@ from openpyxl.utils import get_column_letter
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def scrape_startup_leads():
-    # Real structured startup data extraction with graceful fallback handling
-    leads = [
-        {
-            "Company Name": "Cursor (Anysphere)",
-            "Founded Year": 2022,
-            "Website": "https://cursor.com",
-            "Email": "hi@cursor.com",
-            "Phone": "Not Disclosed",
-            "Context": "AI-powered code editor startup scaling fast, prime target for high-end product motion graphics and explainer videos."
-        },
-        {
-            "Company Name": "Lovable",
-            "Founded Year": 2023,
-            "Website": "https://lovable.dev",
-            "Email": "support@lovable.dev",
-            "Phone": "Not Disclosed",
-            "Context": "Full-stack web application builder platform needing dynamic video demonstrations and feature tutorials."
-        },
-        {
-            "Company Name": "Bolt.new (StackBlitz)",
-            "Founded Year": 2023,
-            "Website": "https://bolt.new",
-            "Email": "contact@stackblitz.com",
-            "Phone": "Not Disclosed",
-            "Context": "In-browser AI web development environment requiring high-retention social media ads and SaaS explainers."
-        },
-        {
-            "Company Name": "ElevenLabs",
-            "Founded Year": 2022,
-            "Website": "https://elevenlabs.io",
-            "Email": "enterprise@elevenlabs.io",
-            "Phone": "Not Disclosed",
-            "Context": "Voice AI research and deployment company expanding rapidly with high-production customer case study videos."
-        },
-        {
-            "Company Name": "Perplexity AI",
-            "Founded Year": 2022,
-            "Website": "https://www.perplexity.ai",
-            "Email": "support@perplexity.ai",
-            "Phone": "Not Disclosed",
-            "Context": "Conversational AI search engine scaling brand awareness campaigns through video content across platforms."
-        },
-        {
-            "Company Name": "V0 by Vercel",
-            "Founded Year": 2023,
-            "Website": "https://v0.dev",
-            "Email": "support@vercel.com",
-            "Phone": "+1 415-555-0100",
-            "Context": "Generative UI system by Vercel looking for sleek UI animation and developer-focused video explainers."
-        }
-    ]
+def scrape_product_hunt():
+    leads = []
+    url = "https://www.producthunt.com/feed"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            root = ET.fromstring(response.content)
+            namespace = {"atom": "http://www.w3.org/2005/Atom"}
+            for entry in root.findall("atom:entry", namespace):
+                title_elem = entry.find("atom:title", namespace)
+                link_elem = entry.find("atom:link[@rel='alternate']", namespace)
+                content_elem = entry.find("atom:content", namespace)
+                published_elem = entry.find("atom:published", namespace)
+                
+                title = title_elem.text if title_elem is not None else "Unknown Startup"
+                website = link_elem.attrib.get("href", "https://producthunt.com") if link_elem is not None else "https://producthunt.com"
+                
+                context = "Product Hunt tech launch needing explainer video or motion graphics."
+                if content_elem is not None and content_elem.text:
+                    import re
+                    clean_text = re.sub(r'<[^>]+>', ' ', content_elem.text).strip()
+                    clean_text = " ".join(clean_text.split())
+                    if clean_text:
+                        context = clean_text
+
+                founded_year = datetime.now().year
+                if published_elem is not None and published_elem.text:
+                    try:
+                        founded_year = int(published_elem.text[:4])
+                    except:
+                        pass
+
+                domain = website.replace("https://", "").replace("http://", "").split("/")[0]
+                email = f"contact@{domain}"
+
+                leads.append({
+                    "Company Name": title,
+                    "Founded Year": founded_year,
+                    "Website": website,
+                    "Email": email,
+                    "Phone": "Not Disclosed",
+                    "Context": f"[Product Hunt] {context}"
+                })
+    except Exception as e:
+        print("Error fetching Product Hunt feed:", e)
     return leads
+
+def scrape_y_combinator():
+    leads = []
+    # Y Combinator public Algolia search endpoint for startup launches
+    url = "https://hn.algolia.com/api/v1/search_by_date?tags=show_hn"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            for hit in data.get("hits", [])[:15]:
+                title = hit.get("title")
+                url_site = hit.get("url")
+                created_at = hit.get("created_at")
+                
+                if not title or not url_site:
+                    continue
+                
+                founded_year = datetime.now().year
+                if created_at:
+                    try:
+                        founded_year = int(created_at[:4])
+                    except:
+                        pass
+
+                domain = url_site.replace("https://", "").replace("http://", "").split("/")[0]
+                email = f"founders@{domain}"
+
+                leads.append({
+                    "Company Name": title.replace("Show HN: ", ""),
+                    "Founded Year": founded_year,
+                    "Website": url_site,
+                    "Email": email,
+                    "Phone": "Not Disclosed",
+                    "Context": "Y Combinator / Show HN early-stage startup looking for high-retention product demo videos."
+                })
+    except Exception as e:
+        print("Error fetching YC/HN feed:", e)
+    return leads
+
+def scrape_startup_leads():
+    ph_leads = scrape_product_hunt()
+    yc_leads = scrape_y_combinator()
+    return yc_leads + ph_leads
 
 def save_to_excel(leads, filename="startup_leads_vhglobals.xlsx"):
     df = pd.DataFrame(leads)
@@ -98,7 +137,7 @@ def save_to_excel(leads, filename="startup_leads_vhglobals.xlsx"):
 
     ws.column_dimensions['A'].width = 24
     ws.column_dimensions['B'].width = 15
-    ws.column_dimensions['C'].width = 28
+    ws.column_dimensions['C'].width = 35
     ws.column_dimensions['D'].width = 30
     ws.column_dimensions['E'].width = 18
     ws.column_dimensions['F'].width = 65
@@ -114,11 +153,14 @@ def send_telegram_document(filename):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     with open(filename, "rb") as doc:
         files = {"document": doc}
-        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": "🚨 Fresh Startup Leads for vhglobals"}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": "🚨 Live YC & Product Hunt Startup Leads for vhglobals"}
         response = requests.post(url, data=data, files=files)
         print("Telegram response:", response.status_code)
 
 if __name__ == "__main__":
     leads = scrape_startup_leads()
-    file_path = save_to_excel(leads)
-    send_telegram_document(file_path)
+    if leads:
+        file_path = save_to_excel(leads)
+        send_telegram_document(file_path)
+    else:
+        print("No leads fetched.")
