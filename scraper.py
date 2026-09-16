@@ -10,6 +10,11 @@ from openpyxl.utils import get_column_letter
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+def clean_domain(url):
+    clean = url.replace("https://", "").replace("http://", "").split("/")[0]
+    clean = clean.replace("www.", "")
+    return clean
+
 def scrape_product_hunt():
     leads = []
     url = "https://www.producthunt.com/feed"
@@ -21,17 +26,35 @@ def scrape_product_hunt():
             namespace = {"atom": "http://www.w3.org/2005/Atom"}
             for entry in root.findall("atom:entry", namespace):
                 title_elem = entry.find("atom:title", namespace)
-                link_elem = entry.find("atom:link[@rel='alternate']", namespace)
                 content_elem = entry.find("atom:content", namespace)
                 published_elem = entry.find("atom:published", namespace)
                 
                 title = title_elem.text if title_elem is not None else "Unknown Startup"
-                website = link_elem.attrib.get("href", "https://producthunt.com") if link_elem is not None else "https://producthunt.com"
                 
-                context = "Product Hunt tech launch needing explainer video or motion graphics."
-                if content_elem is not None and content_elem.text:
+                # Extract actual target link from content HTML description
+                content_html = content_elem.text if content_elem is not None else ""
+                real_website = "https://producthunt.com"
+                
+                if "href=\"" in content_html:
                     import re
-                    clean_text = re.sub(r'<[^>]+>', ' ', content_elem.text).strip()
+                    # Look for external links in the description body
+                    urls = re.findall(r'href="(https?://[^\"]+)"', content_html)
+                    for u in urls:
+                        if "producthunt.com/r/p/" in u:
+                            # Resolve Product Hunt outbound redirect link
+                            try:
+                                r_resp = requests.head(u, headers=headers, allow_redirects=True, timeout=3)
+                                real_website = r_resp.url
+                                break
+                            except:
+                                pass
+                        elif "producthunt.com" not in u and "utm_campaign" not in u:
+                            real_website = u
+                            break
+
+                context = "Product Hunt startup looking for product launch videos and motion graphics."
+                if content_html:
+                    clean_text = re.sub(r'<[^>]+>', ' ', content_html).strip()
                     clean_text = " ".join(clean_text.split())
                     if clean_text:
                         context = clean_text
@@ -43,13 +66,13 @@ def scrape_product_hunt():
                     except:
                         pass
 
-                domain = website.replace("https://", "").replace("http://", "").split("/")[0]
-                email = f"contact@{domain}"
+                domain = clean_domain(real_website)
+                email = f"founders@{domain}" if domain != "producthunt.com" else "hello@producthunt.com"
 
                 leads.append({
                     "Company Name": title,
                     "Founded Year": founded_year,
-                    "Website": website,
+                    "Website": real_website,
                     "Email": email,
                     "Phone": "Not Disclosed",
                     "Context": f"[Product Hunt] {context}"
@@ -60,7 +83,6 @@ def scrape_product_hunt():
 
 def scrape_y_combinator():
     leads = []
-    # Y Combinator public Algolia search endpoint for startup launches
     url = "https://hn.algolia.com/api/v1/search_by_date?tags=show_hn"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -75,6 +97,10 @@ def scrape_y_combinator():
                 if not title or not url_site:
                     continue
                 
+                # Skip raw github user profile repos if they aren't dedicated project landing pages
+                if "github.com" in url_site and url_site.count("/") < 5:
+                    continue
+
                 founded_year = datetime.now().year
                 if created_at:
                     try:
@@ -82,7 +108,7 @@ def scrape_y_combinator():
                     except:
                         pass
 
-                domain = url_site.replace("https://", "").replace("http://", "").split("/")[0]
+                domain = clean_domain(url_site)
                 email = f"founders@{domain}"
 
                 leads.append({
@@ -91,7 +117,7 @@ def scrape_y_combinator():
                     "Website": url_site,
                     "Email": email,
                     "Phone": "Not Disclosed",
-                    "Context": "Y Combinator / Show HN early-stage startup looking for high-retention product demo videos."
+                    "Context": "Show HN / YC early-stage technical startup needing high-retention demo videos."
                 })
     except Exception as e:
         print("Error fetching YC/HN feed:", e)
@@ -153,7 +179,7 @@ def send_telegram_document(filename):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     with open(filename, "rb") as doc:
         files = {"document": doc}
-        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": "🚨 Live YC & Product Hunt Startup Leads for vhglobals"}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": "🚨 Clean Real-Website Startup Leads for vhglobals"}
         response = requests.post(url, data=data, files=files)
         print("Telegram response:", response.status_code)
 
