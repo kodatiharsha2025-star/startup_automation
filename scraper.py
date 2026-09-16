@@ -1,9 +1,12 @@
 import os
 import requests
+import time
+import re
 import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 import pandas as pd
 import openpyxl
-from datetime import datetime
+from datetime import datetime, timedelta
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -15,83 +18,51 @@ def clean_domain(url):
     clean = clean.replace("www.", "")
     return clean
 
-def scrape_product_hunt():
-    leads = []
-    url = "https://www.producthunt.com/feed"
-    headers = {"User-Agent": "Mozilla/5.0"}
+def extract_real_email_from_website(url):
+    # Attempts to find a real published contact email from the homepage
     try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
-            namespace = {"atom": "http://www.w3.org/2005/Atom"}
-            for entry in root.findall("atom:entry", namespace):
-                title_elem = entry.find("atom:title", namespace)
-                content_elem = entry.find("atom:content", namespace)
-                published_elem = entry.find("atom:published", namespace)
-                
-                title = title_elem.text if title_elem is not None else "Unknown Startup"
-                content_html = content_elem.text if content_elem is not None else ""
-                
-                real_website = ""
-                if "href=\"" in content_html:
-                    import re
-                    urls = re.findall(r'href="(https?://[^\"]+)"', content_html)
-                    for u in urls:
-                        if "/r/p/" in u:
-                            try:
-                                r = requests.get(u, headers=headers, allow_redirects=True, timeout=3)
-                                if "producthunt.com" not in r.url:
-                                    real_website = r.url
-                                    break
-                            except:
-                                pass
-                        elif "producthunt.com" not in u and "utm_" not in u:
-                            real_website = u
-                            break
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=4)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            # Look for mailto links
+            mailtos = soup.find_all('a', href=re.compile(r'^mailto:'))
+            for m in mailtos:
+                email = m['href'].replace('mailto:', '').split('?')[0].strip()
+                if '@' in email and '.' in email:
+                    return email
+            
+            # Look via regex for email pattern in text
+            emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', res.text)
+            for e in emails:
+                if not any(x in e.lower() for x in ['example', 'png', 'jpg', 'w3.org', 'domain', 'sentry']):
+                    return e
+    except:
+        pass
+    
+    # Fallback to smart pattern if no public email found on homepage
+    domain = clean_domain(url)
+    return f"founders@{domain}"
 
-                if not real_website or "producthunt.com" in real_website:
-                    continue
-
-                context = "Product Hunt startup looking for product launch videos and motion graphics."
-                if content_html:
-                    clean_text = re.sub(r'<[^>]+>', ' ', content_html).strip()
-                    clean_text = " ".join(clean_text.split())
-                    if clean_text:
-                        context = clean_text
-
-                founded_year = datetime.now().year
-                if published_elem is not None and published_elem.text:
-                    try:
-                        founded_year = int(published_elem.text[:4])
-                    except:
-                        pass
-
-                domain = clean_domain(real_website)
-                email = f"founders@{domain}"
-
-                leads.append({
-                    "Company Name": title,
-                    "Founded Year": founded_year,
-                    "Website": real_website,
-                    "Email": email,
-                    "Phone": "Not Disclosed",
-                    "Context": f"[Product Hunt] {context}"
-                })
-    except Exception as e:
-        print("Error fetching Product Hunt feed:", e)
-    return leads
-
-def scrape_y_combinator():
+def scrape_historical_y_combinator():
     leads = []
-    # Fetch across multiple pages (e.g., 50 hits per page up to page 2 = 100+ startups)
-    for page in range(2):
-        url = f"https://hn.algolia.com/api/v1/search_by_date?tags=show_hn&hitsPerPage=50&page={page}"
+    # Calculate timestamp for 6 months ago
+    six_months_ago = datetime.now() - timedelta(days=180)
+    timestamp_limit = int(six_months_ago.timestamp())
+    
+    # Loop through multiple pages to capture 6 months of historical Show HN launches
+    for page in range(10): # Pulls up to 1000 historical records across pages
+        url = f"https://hn.algolia.com/api/v1/search_by_date?tags=show_hn&numericFilters=created_at_i>{timestamp_limit}&hitsPerPage=100&page={page}"
         headers = {"User-Agent": "Mozilla/5.0"}
         try:
             response = requests.get(url, headers=headers, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                for hit in data.get("hits", []):
+                hits = data.get("hits", [])
+                if not hits:
+                    break
+                
+                for hit in hits:
                     title = hit.get("title")
                     url_site = hit.get("url")
                     created_at = hit.get("created_at")
@@ -106,8 +77,8 @@ def scrape_y_combinator():
                         except:
                             pass
 
-                    domain = clean_domain(url_site)
-                    email = f"founders@{domain}"
+                    # Try to extract real email or use clean fallback
+                    email = extract_real_email_from_website(url_site)
 
                     leads.append({
                         "Company Name": title.replace("Show HN: ", ""),
@@ -115,22 +86,20 @@ def scrape_y_combinator():
                         "Website": url_site,
                         "Email": email,
                         "Phone": "Not Disclosed",
-                        "Context": "Show HN / YC early-stage technical startup needing high-retention demo videos."
+                        "Context": "Historical Show HN / YC startup from the past 6 months looking for explainer & demo videos."
                     })
+                time.sleep(0.5) # Be polite to the free API endpoint
         except Exception as e:
-            print(f"Error fetching YC/HN page {page}:", e)
+            print(f"Error fetching historical page {page}:", e)
+            break
+            
     return leads
-
-def scrape_startup_leads():
-    yc_leads = scrape_y_combinator()
-    ph_leads = scrape_product_hunt()
-    return yc_leads + ph_leads
 
 def save_to_excel(leads, filename="startup_leads_vhglobals.xlsx"):
     df = pd.DataFrame(leads).drop_duplicates(subset=["Website"])
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Startup Leads"
+    ws.title = "Startup Leads 6M"
     ws.views.sheetView[0].showGridLines = True
 
     HEADER_FILL = PatternFill(start_color="1B2631", end_color="1B2631", fill_type="solid")
@@ -159,10 +128,10 @@ def save_to_excel(leads, filename="startup_leads_vhglobals.xlsx"):
             if row_idx % 2 == 1:
                 cell.fill = ZEBRA_FILL
 
-    ws.column_dimensions['A'].width = 24
+    ws.column_dimensions['A'].width = 28
     ws.column_dimensions['B'].width = 15
-    ws.column_dimensions['C'].width = 35
-    ws.column_dimensions['D'].width = 30
+    ws.column_dimensions['C'].width = 38
+    ws.column_dimensions['D'].width = 32
     ws.column_dimensions['E'].width = 18
     ws.column_dimensions['F'].width = 65
 
@@ -177,14 +146,14 @@ def send_telegram_document(filename):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     with open(filename, "rb") as doc:
         files = {"document": doc}
-        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": f"🚨 High-Volume Startup Leads Dataset for vhglobals"}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": "🚨 Full 6-Month Historical Startup Dataset for vhglobals"}
         response = requests.post(url, data=data, files=files)
         print("Telegram response:", response.status_code)
 
 if __name__ == "__main__":
-    leads = scrape_startup_leads()
+    leads = scrape_historical_y_combinator()
     if leads:
         file_path = save_to_excel(leads)
         send_telegram_document(file_path)
     else:
-        print("No leads fetched.")
+        print("No historical leads fetched.")
