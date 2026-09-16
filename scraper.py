@@ -18,9 +18,9 @@ def clean_domain(url):
 def scrape_product_hunt():
     leads = []
     url = "https://www.producthunt.com/feed"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
             root = ET.fromstring(response.content)
             namespace = {"atom": "http://www.w3.org/2005/Atom"}
@@ -37,7 +37,6 @@ def scrape_product_hunt():
                     import re
                     urls = re.findall(r'href="(https?://[^\"]+)"', content_html)
                     for u in urls:
-                        # Find the outbound redirect link
                         if "/r/p/" in u:
                             try:
                                 r = requests.get(u, headers=headers, allow_redirects=True, timeout=3)
@@ -50,7 +49,6 @@ def scrape_product_hunt():
                             real_website = u
                             break
 
-                # If redirect resolution failed, skip or use a direct fallback
                 if not real_website or "producthunt.com" in real_website:
                     continue
 
@@ -85,40 +83,42 @@ def scrape_product_hunt():
 
 def scrape_y_combinator():
     leads = []
-    url = "https://hn.algolia.com/api/v1/search_by_date?tags=show_hn"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            for hit in data.get("hits", [])[:20]:
-                title = hit.get("title")
-                url_site = hit.get("url")
-                created_at = hit.get("created_at")
-                
-                if not title or not url_site or "github.com" in url_site:
-                    continue
+    # Fetch across multiple pages (e.g., 50 hits per page up to page 2 = 100+ startups)
+    for page in range(2):
+        url = f"https://hn.algolia.com/api/v1/search_by_date?tags=show_hn&hitsPerPage=50&page={page}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                for hit in data.get("hits", []):
+                    title = hit.get("title")
+                    url_site = hit.get("url")
+                    created_at = hit.get("created_at")
+                    
+                    if not title or not url_site or "github.com" in url_site:
+                        continue
 
-                founded_year = datetime.now().year
-                if created_at:
-                    try:
-                        founded_year = int(created_at[:4])
-                    except:
-                        pass
+                    founded_year = datetime.now().year
+                    if created_at:
+                        try:
+                            founded_year = int(created_at[:4])
+                        except:
+                            pass
 
-                domain = clean_domain(url_site)
-                email = f"founders@{domain}"
+                    domain = clean_domain(url_site)
+                    email = f"founders@{domain}"
 
-                leads.append({
-                    "Company Name": title.replace("Show HN: ", ""),
-                    "Founded Year": founded_year,
-                    "Website": url_site,
-                    "Email": email,
-                    "Phone": "Not Disclosed",
-                    "Context": "Show HN / YC early-stage technical startup needing high-retention demo videos."
-                })
-    except Exception as e:
-        print("Error fetching YC/HN feed:", e)
+                    leads.append({
+                        "Company Name": title.replace("Show HN: ", ""),
+                        "Founded Year": founded_year,
+                        "Website": url_site,
+                        "Email": email,
+                        "Phone": "Not Disclosed",
+                        "Context": "Show HN / YC early-stage technical startup needing high-retention demo videos."
+                    })
+        except Exception as e:
+            print(f"Error fetching YC/HN page {page}:", e)
     return leads
 
 def scrape_startup_leads():
@@ -127,7 +127,7 @@ def scrape_startup_leads():
     return yc_leads + ph_leads
 
 def save_to_excel(leads, filename="startup_leads_vhglobals.xlsx"):
-    df = pd.DataFrame(leads)
+    df = pd.DataFrame(leads).drop_duplicates(subset=["Website"])
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Startup Leads"
@@ -177,7 +177,7 @@ def send_telegram_document(filename):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     with open(filename, "rb") as doc:
         files = {"document": doc}
-        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": "🚨 Clean Real-Website Startup Leads for vhglobals"}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": f"🚨 High-Volume Startup Leads Dataset for vhglobals"}
         response = requests.post(url, data=data, files=files)
         print("Telegram response:", response.status_code)
 
