@@ -18,9 +18,9 @@ def clean_domain(url):
 def scrape_product_hunt():
     leads = []
     url = "https://www.producthunt.com/feed"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             root = ET.fromstring(response.content)
             namespace = {"atom": "http://www.w3.org/2005/Atom"}
@@ -30,27 +30,29 @@ def scrape_product_hunt():
                 published_elem = entry.find("atom:published", namespace)
                 
                 title = title_elem.text if title_elem is not None else "Unknown Startup"
-                
-                # Extract actual target link from content HTML description
                 content_html = content_elem.text if content_elem is not None else ""
-                real_website = "https://producthunt.com"
                 
+                real_website = ""
                 if "href=\"" in content_html:
                     import re
-                    # Look for external links in the description body
                     urls = re.findall(r'href="(https?://[^\"]+)"', content_html)
                     for u in urls:
-                        if "producthunt.com/r/p/" in u:
-                            # Resolve Product Hunt outbound redirect link
+                        # Find the outbound redirect link
+                        if "/r/p/" in u:
                             try:
-                                r_resp = requests.head(u, headers=headers, allow_redirects=True, timeout=3)
-                                real_website = r_resp.url
-                                break
+                                r = requests.get(u, headers=headers, allow_redirects=True, timeout=3)
+                                if "producthunt.com" not in r.url:
+                                    real_website = r.url
+                                    break
                             except:
                                 pass
-                        elif "producthunt.com" not in u and "utm_campaign" not in u:
+                        elif "producthunt.com" not in u and "utm_" not in u:
                             real_website = u
                             break
+
+                # If redirect resolution failed, skip or use a direct fallback
+                if not real_website or "producthunt.com" in real_website:
+                    continue
 
                 context = "Product Hunt startup looking for product launch videos and motion graphics."
                 if content_html:
@@ -67,7 +69,7 @@ def scrape_product_hunt():
                         pass
 
                 domain = clean_domain(real_website)
-                email = f"founders@{domain}" if domain != "producthunt.com" else "hello@producthunt.com"
+                email = f"founders@{domain}"
 
                 leads.append({
                     "Company Name": title,
@@ -86,19 +88,15 @@ def scrape_y_combinator():
     url = "https://hn.algolia.com/api/v1/search_by_date?tags=show_hn"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            for hit in data.get("hits", [])[:15]:
+            for hit in data.get("hits", [])[:20]:
                 title = hit.get("title")
                 url_site = hit.get("url")
                 created_at = hit.get("created_at")
                 
-                if not title or not url_site:
-                    continue
-                
-                # Skip raw github user profile repos if they aren't dedicated project landing pages
-                if "github.com" in url_site and url_site.count("/") < 5:
+                if not title or not url_site or "github.com" in url_site:
                     continue
 
                 founded_year = datetime.now().year
@@ -124,8 +122,8 @@ def scrape_y_combinator():
     return leads
 
 def scrape_startup_leads():
-    ph_leads = scrape_product_hunt()
     yc_leads = scrape_y_combinator()
+    ph_leads = scrape_product_hunt()
     return yc_leads + ph_leads
 
 def save_to_excel(leads, filename="startup_leads_vhglobals.xlsx"):
